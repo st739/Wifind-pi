@@ -91,9 +91,22 @@ def confirm_wifi(wifi_json):
     # we should come up on the preferred ip. Use ifconfig to check
     with open(shell_script, 'w') as s_s:
         s_s.write(f'''#!/usr/bin/bash
-ssid={ssid}
-hotspot={hotspot}
-password={password}
+try_eval()
+{brace}
+    $(eval "$1" >$out 2>$err)
+    rc=$?
+    if [ $rc -eq 0 ] ; then
+        [ -f $out ] && cat $out
+    else
+        [ -f $err ] && cat $err
+    fi
+    rm $out $err >/dev/null 2>&1
+    return $rc
+{ecarb}
+# allow blanks in strings
+ssid="{ssid}"
+hotspot="{hotspot}"
+password="{password}"
 preferred_ip={preferred_ip}
 topdir={topdir}
 rc=
@@ -104,12 +117,12 @@ echo "logging to $log" | tee $log
 # rescan here. If too much time has passed, nmcli "forgets"
 # nmcli device wifi >/dev/null 2>&1
 nmcli device wifi > $log 2>&1
-nmcli device wifi connect \"$ssid\" password $password >> $log
+eval "nmcli device wifi connect \\"$ssid\\" password \\"$password\\" >> $log"
 if [ $? -ne 0 ] ; then
-    echo "Can't connect to $ssid using password" >&2
+    echo "Can't connect to \"$ssid\" using password" >&2
     rc=1
     # try the Trixie command
-    nmcli connection up \"$ssid\"
+    eval "nmcli connection up \\"$ssid\\""
     if [ $? -ne 0 ] ; then
         echo "Can't bring $ssid connection up" >&2
         rc=1
@@ -125,10 +138,12 @@ echo "After nmcli connect, rc is $rc" >> $log
 [ "$rc" ] && exit $rc
 
 # ssid is up, update the application_ssid file for systemd on subsequent boots
-echo "$ssid" > $application_ssid_file
+echo $ssid > $application_ssid_file
                   
-full_ip=$(nmcli -g IP4.ADDRESS connection show $ssid | cut -d/ -f1)
-subnet_mask=$(nmcli -g IP4.ADDRESS connection show $ssid | cut -d/ -f2)
+ip_mask=$(try_eval "nmcli -g IP4.ADDRESS connection show \\"$ssid\\" ")
+full_ip=$(echo $ip_mask | cut -d/ -f1)
+subnet_mask=$(echo $ip_mask | cut -d/ -f2)
+
 if [ "$preferred_ip" ] ; then
    # what's our ipv4 address?
    network=$(echo $full_ip | cut -d. -f-3)
@@ -148,15 +163,15 @@ else
    rc=0
 fi
 if [ "$rc" = "1" ] ; then
-   echo "nmcli down $ssid - rc is 1" >> $log
-   nmcli connection down \"$ssid\"
+   echo "nmcli down \"$ssid\" - rc is 1" >> $log
+   eval "nmcli connection down \\"$ssid.\\""
    echo "nmcli up $hotspot - rc is 1" >> $log
-   nmcli connection up \"$hotspot\"
+   eval "nmcli connection up \\"$hotspot\\""
 else
-   echo "nmcli modify $ssid" >> $log
+   echo "nmcli modify \"$ssid\" >> $log
    # setting pipefail provides the return code of the pipe command
    set -o pipefail
-   nmcli connection modify \"$ssid\" ipv6.method disabled 2>&1 | tee -a $log
+   eval "nmcli connection modify \\"$ssid\\" ipv6.method disabled 2>&1 | tee -a $log"
    rc=$?
    set +o pipefail
    if [ "$rc" = "0" ] ; then
@@ -168,7 +183,7 @@ else
    # [ "$rc" = "0" ] || exit $rc
    echo "nmcli down $ssid" >> $log
    set -o pipefail
-   nmcli connection down \"$ssid\" 2>&1 | tee -a $log
+   eval "nmcli connection down \\"$ssid\\" 2>&1 | tee -a $log"
    rc=$?
    set +o pipefail
    if [ "$rc" = "0" ] ; then
@@ -180,7 +195,7 @@ else
    # [ "$rc" = "0" ] || exit $rc
    echo "nmcli up $ssid" >> $log
    set -o pipefail
-   nmcli connection up \"$ssid\" 2>&1 | tee -a $log
+   eval "nmcli connection up \\"$ssid\\" 2>&1 | tee -a $log"
    rc=$?
    set +o pipefail
    if [ "$rc" = "0" ] ; then
@@ -241,7 +256,7 @@ def wifi_rescan(wifi_json):
     with open(shell_script, 'w') as s_s:
         s_s.write(f'''#!/usr/bin/bash
 topdir={topdir}
-hotspot_name=\"{hotspot_name}\"
+hotspot_name="{hotspot_name}"
 json="{brace} \\"hotspot_name\\": \\"$hotspot_name\\", \\"preferred_ip\\": \\"\\", \\"access_points\\": ["
 # set IFS to nl to prevent word split on silly hotspot names
 IFS='
@@ -255,7 +270,7 @@ do
    # arb choice of 45 to weed out weak aps
    # in office, home networks are < 45
    if [ $stren -gt 45 ] ; then
-      json="$json  \\"$ap\\","
+      json="$json \\"$ap\\","
    fi
 done
 unset IFS
@@ -297,6 +312,7 @@ def connect_to_wifi(wifi_json):
     Have to connect to the named ssid and collect the DHCP IP
     Then, if there's a preferred IP, test ping it
     Then return either the DHCP IP or the full preferred IP
+    If there's a configured nmconnection on entry, remove it
     '''
     shell_script = Path(f'/tmp/wifi-conn.{str(os.getpid())}')
     password = wifi_json['wifi_pass']
@@ -309,69 +325,63 @@ def connect_to_wifi(wifi_json):
 
     with open(shell_script, 'w') as s_s:
         s_s.write(f'''#!/usr/bin/bash
-try_nmcli()
+try_eval()
 {brace}
-    error=$(eval "$1" >$out 2>$err)
+    $(eval "$1" >$out 2>$err)
     rc=$?
     if [ $rc -eq 0 ] ; then
-        cat $out
+        [ -f $out ] && cat $out
     else
-        error=$(cat $err | sed 's/Error: //')
-        echo $error | grep -wE 'required|provided' >/dev/null && error="Wrong password"
-        [ "$error" ] && echo "$error"
+        [ -f $err ] && cat $err
     fi
     rm $out $err >/dev/null 2>&1
     return $rc
 {ecarb}
 # allow blanks in ssid and password
-ssid=\"{ssid}\"
-hotspot=\"{hotspot}\"
-password=\"{password}\"
+ssid="{ssid}"
+hotspot="{hotspot}"
+password="{password}"
 preferred_ip={preferred_ip}
 this=$(basename $0)
 out="/tmp/$this.$$.out"
 err="/tmp/$this.$$.err"
 tries=3
 try=1
+# clear an existing ssid entry - avoid possible "IP in use" error
+# which could happen if the user quits from the confirmation page
+eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
 # refresh the list of available networks
 # otherwise we could fail to connect
 nmcli device wifi >/dev/null 2>&1
 while [ $try -le $tries ] ;
 do
-    result=$(try_nmcli "nmcli device wifi connect \"$ssid\" password \"$password\"")
+    result=$(try_eval "nmcli device wifi connect \\"$ssid\\" password \\"$password\\"")
     rc=$?
     if [ $rc -ne 0 ] ; then
-        # echo "$try Connect to \"$ssid\" failed with error [$result]" >&2
+        # echo "$try Connect to $ssid failed with error [$result]" >&2
         sleep 5
     else
-        echo "PASS:Connected to \"$ssid\""
+        echo "PASS:Connected to $ssid"
         break
     fi
     try=$(($try+1))
 done
 if [ $try -ge $tries ] ; then
-    # echo "FAIL:Can't connect to \"$ssid\", error [$error], rc $rc" >&2
-    echo "FAIL:Can't connect to \"$ssid\", error [$result]" >&2
+    # echo "FAIL:Can't connect to $ssid, error [$error], rc $rc" >&2
+    # error message for wrong password is confusing 
+    # "secrets were required but not provided..." - simplify
+    error=$(echo $result | sed 's/Error: //')
+    echo $error | grep -wE 'required|provided' >/dev/null && error="Wrong password"
+    echo "FAIL:Can't connect to $ssid, $error" >&2
     # whack any nmcli entry
-    nmcli connection delete \"$ssid\" >/dev/null 2>&1
+    eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
     exit 1
 fi
-result=$(try_nmcli "nmcli -g IP4.ADDRESS connection show \"$ssid\" | cut -d/ -f1")
-rc=$?
-if [ $rc -eq 0 ] ; then
-    full_ip=$result
-else
-    echo "FAIL:$result" >2
-    exit 1
-fi
-result=$(try_nmcli "nmcli -g IP4.ADDRESS connection show \"$ssid\"") # | cut -d/ -f2)
-if [ $rc -eq 0 ] ; then
-    subnet_mask=$result
-else
-    echo "FAIL:$result" >2
-    exit 1
-fi
-subnet_mask=$(echo $subnet_mask | cut -d/ -f2)
+
+ip_mask=$(try_eval "nmcli -g IP4.ADDRESS connection show \\"$ssid\\" ")
+full_ip=$(echo $ip_mask | cut -d/ -f1)
+subnet_mask=$(echo $ip_mask | cut -d/ -f2)
+
 if [ "$preferred_ip" ] ; then
    # what's our ipv4 address?
    network=$(echo $full_ip | cut -d. -f-3)
@@ -380,30 +390,30 @@ if [ "$preferred_ip" ] ; then
    ping -c 3 $full_preferred_ip >/dev/null 2>&1
    if [ $? -ne 0 ] ; then
        # ip is available
-       try_nmcli "nmcli connection modify --temporary \"$ssid\" +ipv4.address $full_preferred_ip/$subnet_mask"
+       eval "nmcli connection modify --temporary \\"$ssid\\" +ipv4.address $full_preferred_ip/$subnet_mask"
        if [ $? -ne 0 ] ; then
-           echo "Can't configure $full_preferred_ip on \"$ssid\"" >&2
+           echo "Can't configure $full_preferred_ip on $ssid" >&2
            # whack any nmcli entry
-           nmcli connection delete \"$ssid\" >/dev/null 2>&1
+           eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
            exit 1
        fi
        echo "IP=$full_preferred_ip"
     else
        echo "Preferred IP is in use $full_preferred_ip" >&2
        # whack any nmcli entry
-       nmcli connection delete \"$ssid\" >/dev/null 2>&1
+       eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
        exit 1
    fi
 else
    echo "DHCP=$full_ip"
 fi
 # try to lose IPv6
-try_nmcli "nmcli connection modify \"$ssid\" ipv6.method disabled"
+eval "nmcli connection modify \\"$ssid\\" ipv6.method disabled"
 # FIXME - error checks?
-try_nmcli "nmcli connection down \"$ssid\""
-# [ $? -ne 0 ] && echo "Problem disabling \"$ssid\", reboot and try again" >&2
+eval "nmcli connection down \\"$ssid\\""
+# [ $? -ne 0 ] && echo "Problem disabling $ssid, reboot and try again" >&2
 # but bringing up the hotspot should take the ssid down
-result=$(try_nmcli "nmcli connection up \"$hotspot\"")
+result=$(try_eval "nmcli connection up \\"$hotspot\\"")
 if [ $? -ne 0 ] ; then
     echo "$result" >&2
     exit 1
