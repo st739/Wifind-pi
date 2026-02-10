@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+## debug #!/usr/bin/env -S bash -x
+debug='True' # any string
+# runs from root cron on boot
+# test connect to desired ssid
+# on failure increment kill count
+# when kill count exceeds threshold
+# delete desired ssid and reboot in configuration mode
+here=$(dirname $0)
+this=$(basename $0)
+topdir=$(dirname $here)
+net_dir=$topdir/networkmanager
+log=$topdir/log
+kill_file=${topdir}/data/kill_file
+application_ssid_file=${topdir}/data/application_ssid
+if [ -f $application_ssid_file ] ; then
+	desired_ssid=$(cat $application_ssid_file)
+else
+	desired_ssid=
+fi
+lists=$net_dir/lists
+ap_stren_file=$lists/strength
+ap_list_file=$lists/available
+up_list_file=$lists/up
+down_list_file=$lists/down
+
+# contains hotspot_name and hotspot_password
+. $topdir/local_config
+
+# functions
+
+logit()
+{
+	[ "$debug" ] && echo "$(date +"%D %T") $this: $*" >> $log
+}
+
+gen_ap_list()
+{
+	# maybe don't need the strength values
+	# because we are only connecting to the 
+	# desired ssid that was selected via
+	# strength filtering
+	output=$1
+	>$1
+	nmcli device wifi rescan
+	for ap in $(nmcli --terse device wifi list | cut -d: -f8)
+	do
+		echo -e "$ap" >> $output
+	done
+}
+
+# show up or down connection
+
+ap_state()
+{
+	q_string="no"
+	[ "$1" = "up" ] && q_string="yes"
+	output=$2
+	>$2
+	nmcli --terse -f name con | while read name
+	do
+		state=$(nmcli --terse -f name,active con | grep -w "${name}" | cut -d: -f2)
+		ls /etc/NetworkManager/system-connections/"${name}".nmconnection > /dev/null 2>&1
+		if [ $? -eq 0 ] ; then
+			if [ "$state" = "$q_string" ] ; then
+				echo "$name" >> $output
+			fi
+		fi
+	done
+}
+
+killswitch()
+{
+	if [ -f $kill_file ] ; then
+		kill_count=$(cat $kill_file)
+		if [ $kill_count -ge 3 ] ; then
+			# whack the network associated $desired_ssid
+			application_ssid=$(cat $topdir/data/application_ssid)
+			logit "nmcli connection delete $desired_ssid"
+			nmcli connection delete $desired_ssid
+			rc=$?
+			logit "delete ${desired_ssid} rc is $rc"
+			rm $application_ssid_file
+			rc=$?
+			logit "delete ${application_ssid_file} rc is $rc"
+			rm $kill_file
+			rc=$?
+			logit "delete ${kill_file} rc is $rc"
+			# and reboot in hotspot configuration mode
+			logit "rebooting"
+			nohup /usr/sbin/shutdown --reboot now 0<&- &>/dev/null &
+			exit 0
+		else
+			kill_count=$(($kill_count + 1))
+			echo $kill_count > $kill_file
+		fi
+	else
+		echo "1" > $kill_file
+	fi
+	kills=$(<$kill_file)
+	logit "killswitch $kills"
+}
+
+start_application()
+{
+	logit "Starting application"
+	# this is why the service Type=forking
+	# Type=simple kills child processes
+	[ -x "$topdir/start_application" ] && nohup $topdir/start_application $topdir 0<&- &>/dev/null &
+}
+
+# MAIN Main main
+
+# sleep a minute to allow systemd to finish
+sleep 60
+wifi_device=$(nmcli device status |  awk '/ wifi /{ print $1}')
+this=$(basename $0)
+# Do we have a defined access point?
+# if not, nothing to monitor - we are in config mode
+[ -f "$application_ssid_file" ] || { logit "$this:no access point [$application_ssid_file] configured yet" ; exit 0 ; }
+# what access points are available
+gen_ap_list $ap_list_file
+# what's up
+ap_state "up" $up_list_file
+
+logit "is $desired_ssid up?"
+while read ssid
+do
+   echo "does [$ssid] match [$desired_ssid]?"
+   if [ "$ssid" == "$desired_ssid" ] ; then
+		# on bookworm, ssid state is "connecting (configuring)"
+		wifi_state=$(nmcli --terse device | grep -w "$desired_ssid" | cut -d: -f3)
+		if [ "$wifi_state" == "connected" ] ; then
+			logit "$desired_ssid is up"
+			[ -f $kill_file ] && rm $kill_file
+			exit 0
+		fi
+   fi
+done < $up_list_file
+
+logit "try to start ${desired_ssid}"
+nmcli connection up ${desired_ssid}
+rc=$?
+logit "up ${desired_ssid} rc is $rc"
+if [ "$rc" = "0" ] ; then
+	# successful, start the application and exit
+	start_application
+	[ -f $kill_file ] && rm $kill_file
+	exit 0
+fi
+
+killswitch
+
+exit 0

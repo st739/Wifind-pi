@@ -1,0 +1,239 @@
+#!/bin/sh
+# expected to run as root
+# perform WiFi custom setup based on ../hotspot/wifi.json
+# and /etc/NetworkManager/system-connections/
+# 1. If ../hotspot/wifi.json doesn't exist
+# 	start a local WiFi hotspot called Hotspot-`uname -n` with autoconnect-priority=-10
+# 	scan for WiFi networks > ../hotspot/wifi.json
+# 	enable a microdot web server to allow network choice
+# 	on choice, connect to the desired network (network file will be created in
+# 	/etc/NetworkManager/system-connections/)
+# 2. If a working network definition exists in
+# 	/etc/NetworkManager/system-connections/, connect to it
+# 3. If the connection cannot be accessed, fall back to the hotspot, rescan and
+# 	start the web server for network choice
+# hotspot_name=Hotspot-1
+# hotspot_password=Hotspot-pass
+# user=pi
+debug=true	# any string
+here=$(dirname $0)
+this=$(basename $0)
+calc_topdir=$(dirname $here)
+topdir=/usr/local/setup
+topdir=$(dirname $here)
+hot_dir=$topdir/hotspot
+application_ssid_file=$topdir/data/application_ssid	# written by network setup job
+kill_file=$topdir/data/kill_file
+log=$topdir/log
+net_file=${hot_dir}/data/wifi.json
+# local_setup uncomments required locales (en_US.UTF8 UTF8) in /etc/locale.gen 
+# import the local_setup generated config
+# contains hotspot_name and hotspot_password
+. $topdir/local_config
+
+# functions 
+
+logit()
+{
+	[ "$debug" ] && echo "$(date +"%D %T") $this: $*" >> $log
+}
+
+setup_hotspot()
+{
+	# seems that if the ssid is not specified we get Hotspot-`uname -n`
+	logit "nmcli device wifi hotspot ssid $hotspot_name con-name $hotspot_name password $hotspot_password"
+	nmcli device wifi hotspot ssid $hotspot_name con-name $hotspot_name password $hotspot_password || { logit "Can't create wifi hotspot $hotspot_name with password" ;  return 1 ; }
+	# testing shows that wpa-psk hotspot must have 8 char password or else
+	logit "nmcli connection modify $hotspot_name connection.autoconnect-priority -10 connection.autoconnect yes"
+	nmcli connection modify $hotspot_name connection.autoconnect-priority -10 connection.autoconnect yes || { logit "Can't set priority on hotspot $hotspot_name" ; return 1 ; }
+	return 0
+}
+
+# start_application must contain everything required to set up and start the application
+
+start_application()
+{
+	logit "This is where the normal application starts"
+	# this is why the service Type=forking
+	# Type=simple kills child processes
+	[ -x "$topdir/start_application" ] && nohup $topdir/start_application $topdir 0<&- &>/dev/null &
+}
+
+# MAIN Main main
+logit "starting"
+logit "calc_topdir is $calc_topdir"
+
+# Conditional changes
+# These are mainly for debugging during development and should not be 
+# used for production
+
+if [ "$desired_locale" ] ; then
+	grep $desired_locale /etc/default/locale >/dev/null
+	if [ $? -eq 0 ] ; then
+		logit "Locale is $LANG"
+	else
+		locale-gen
+		# change the locale
+		/usr/bin/raspi-config nonint do_change_locale $desired_locale
+		# if the previous doesn't work, might have to
+		# clear the locale
+		# update-locale --no-checks LANG
+		# then set
+		# update-locale --no-checks LANG=en_US.UTF-8 UTF-8
+	fi
+fi 
+
+if [ "$enable_ssh" ] ; then
+	if [ $(/usr/bin/raspi-config nonint get_ssh) -eq 0 ] ; then
+		logit "ssh is active"
+	else
+		logit "enabling ssh"	
+		# enable ssh
+		/usr/bin/raspi-config nonint do_ssh 0
+	fi
+fi
+# host keys
+# already done
+# ssh-keygen -A
+
+if [ "$desired_timezone" ] ; then
+	tz=$(cat /etc/timezone)
+	if [ "$tz" = "$desired_timezone" ] ; then
+		logit "timezone is set to $desired_timezone"
+	else
+		logit "setting timezone"
+		/usr/bin/raspi-config nonint do_change_timezone $desired_timezone
+	fi
+fi
+
+if [ "$desired_wifi_country" ] ; then
+	# set the wifi domain - didn't work
+	# /usr/bin/raspi-config nonint do_wifi_country $desired_wifi_country
+	# this resolves to iw reg set $desired_wifi_country
+	/usr/sbin/iw reg get | grep -q "country $desired_wifi_country"
+	if [ $? -eq 0 ] ; then
+		logit "WiFi country is set to $desired_wifi_country"
+	else
+		logit "set WiFi country to $desired_wifi_country"
+		/usr/sbin/iw reg set $desired_wifi_country
+	fi
+fi 
+
+# end of conditional changes
+
+# unblock wifi
+rfkill --output "TYPE,SOFT,HARD" --noheadings list wlan | read type soft hard
+if [ "$soft" = "unblocked" -a "$hard" = "unblocked" ] ; then
+	logit "WiFi is unblocked"
+else
+	logit "unblocking WiFi"
+	rfkill unblock wifi
+fi
+nmcli --get-values "WIFI-HW,WIFI" radio | read line
+if [ "$line" = "enabled:enabled" ] ; then
+	logit "WiFi is on"
+else
+	logit "turning WiFi on - attempt 1"
+	# turn on the wifi
+	nmcli radio wifi on 2>&1 >> $log
+fi
+sleep 5
+logit "nmcli --terse radio wifi"
+nmcli --terse radio wifi >> $log
+
+# trixie first boot after sd card creation wifi is unavailable
+
+attempt=2
+radio_state=$(nmcli --terse radio wifi)
+while [ "$radio_state" != "enabled" ] ; do
+	[ $attempt -gt 5 ] && { logit "Force reboot"	; shutdown -r now ; }
+	logit "turning WiFi on - attempt $attempt"
+	nmcli radio wifi on 2>&1 >> $log
+	sleep 5
+	radio_state=$(nmcli --terse radio wifi)
+	attempt=$((attempt+1))
+done
+
+logit "nmcli device"
+nmcli device >> $log
+
+logit "display connection"
+nmcli connection >> $log
+
+logit "application_ssid_file [$application_ssid_file]"
+if [ -f $application_ssid_file ] ; then
+	desired_ssid=$(cat $application_ssid_file)
+	# or $(grep -v "^#" $application_ssid_file) if we want comments in the file
+	# short sleep here - we were checking before the interface had come up
+	# or loop a bit
+	sleep 5
+	logit "Looking for $desired_ssid"
+	logit "nmcli --terse device | grep -w wifi | grep -w connected | grep $desired_ssid"
+	nmcli --terse device | grep -w wifi | grep -w connected | grep $desired_ssid > /dev/null
+	if [ $? -eq 0 ] ; then
+		logit "Starting application"
+		start_application
+		return 0
+	else
+		# killswitch should take care of this
+		logit "Couldn't find $desired_ssid"
+		return 0
+	fi
+fi
+
+logit "net_file [$net_file]"
+
+if [ ! -f $net_file ] ; then
+	setup_hotspot
+	if [ $? -ne 0 ] ; then
+		logit "Can't set up hotspot, exiting"
+		exit
+	fi
+fi
+
+logit "Scanning wifi"
+nmcli device wifi rescan >> $log 2>&1
+sleep 5
+logit "Display wifi"
+l=0
+while [ $l -le 5 ] 
+do
+	items=$(nmcli --terse device wifi list | wc -l)
+	[ $items -gt 1 ] && break
+	i=$((l+1))
+	sleep 5
+done
+nmcli device wifi list >> $log 2>&1
+# pick up field 12 (signal strength) and filter out weak networks with strength
+# less than 45
+logit "Writing access points to $net_file"
+json="{ \"hotspot_name\": \"$hotspot_name\", \"preferred_ip\": \"\", \"access_points\": ["
+# json='{ "preferred_ip": "", "access_points": ['
+# set IFS to nl to prevent word split on silly hotspot names
+IFS='
+'
+for line in $(nmcli --terse device wifi list | cut -d: -f8,12)
+do
+	ap=$(echo $line|cut -d: -f1)
+	# lose non-numerics if they turn up in field 12
+	stren=$(echo $line|cut -d: -f2|sed 's/[^0-9]*//g')
+	[ "$stren" ] || stren=0	# this will drop aps with non-numeric strength
+	# arb choice of 45 to weed out weak aps
+	# in office, home networks are < 45
+	if [ $stren -gt 45 ] ; then
+		json="$json  \"$ap\","
+	fi
+done
+unset IFS
+# not adding hostspot any more # json="$json \"$hotspot_name\""
+json=$(echo $json | sed 's/,$/]}/')
+# write a json file
+echo $json > $net_file
+
+# now start the webserver for initial WiFi configuration
+logit "Starting webserver for initial configuration"
+logit "/usr/bin/python3 $hot_dir/cfg_webserver.py $topdir > $hot_dir/initial.log"
+nohup  /usr/bin/python3 $hot_dir/cfg_webserver.py $topdir > $hot_dir/initial.log 0<&- &>/dev/null &
+# if the user successfully connects to a wifi network, it should be added to system-connections and be active going forward...
+# and finally, make cron re-read crontabs
+pkill -HUP cron

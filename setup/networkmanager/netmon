@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+## debug #!/usr/bin/env -S bash -x
+debug='True' # any string
+# expected to run as root
+# try to track networkmanager events
+# killswitch runs as a boot cron job
+# remove the killswitch file if we start the application
+# if we are running trixie, this is a cron job
+# if earlier, this is called by NetworkManager/dispatcher
+# here=$(dirname $0)
+here=$(dirname $(realpath "$0"))	# needed when symlinked to NetworkManager/dispatcher
+this=$(basename $0)
+topdir=$(dirname $here)
+net_dir=$topdir/networkmanager
+log=$topdir/log
+data_dir=$topdir/data
+kill_file=$data_dir/kill_file
+application_ssid_file=$data_dir/application_ssid
+if [ -f $application_ssid_file ] ; then
+	desired_ssid=$(cat $application_ssid_file)
+else
+	desired_ssid=
+fi
+lists=$net_dir/lists
+ap_stren_file=$lists/strength
+ap_list_file=$lists/available
+up_list_file=$lists/up
+down_list_file=$lists/down
+
+# contains hotspot_name and hotspot_password
+. $topdir/local_config
+
+# functions
+
+logit()
+{
+	[ "$debug" ] && echo "$(date +"%D %T") $this: $*" >> $log
+}
+
+query_os_version()
+{
+	grep "VERSION_CODENAME=" /etc/os-release | cut -d= -f2
+}
+
+gen_ap_list()
+{
+	# maybe don't need the strength values
+	# because we are only connecting to the 
+	# desired ssid that was selected via
+	# strength filtering
+	output=$1
+	>$1
+	nmcli device wifi rescan
+	for ap in $(nmcli --terse device wifi list | cut -d: -f8)
+	do
+		echo -e "$ap" >> $output
+	done
+}
+
+# show up or down connection
+
+ap_state()
+{
+	q_string="no"
+	[ "$1" = "up" ] && q_string="yes"
+	output=$2
+	>$2
+	nmcli --terse -f name con | while read name
+	do
+		state=$(nmcli --terse -f name,active con | grep -w "${name}" | cut -d: -f2)
+		ls /etc/NetworkManager/system-connections/"${name}".nmconnection > /dev/null 2>&1
+		if [ $? -eq 0 ] ; then
+			if [ "$state" = "$q_string" ] ; then
+				echo "$name" >> $output
+			fi
+		fi
+	done
+}
+
+start_application()
+{
+	logit "Starting application"
+	# this is why the service Type=forking
+	# Type=simple kills child processes
+	[ -f "$topdir/data/kill_file" ] && rm "$topdir/data/kill_file"
+	[ -x "$topdir/start_application" ] && nohup $topdir/start_application $topdir 0<&- &>/dev/null &
+}
+
+# MAIN Main main
+
+# Do we have a defined access point?
+# if not, nothing to monitor - we are in config mode
+[ -f "$application_ssid_file" ] || { logit "$this:no access point [$application_ssid_file] configured yet" ; exit 0 ; }
+wifi_device=$(nmcli device status |  awk '/ wifi /{ print $1}')
+os_version=$(query_os_version)
+
+# logit "$this:received [$1] vs [$wifi_device] and [$2] vs [up]"
+if [ "$os_version" == "trixie" ] ; then
+	:
+else
+	# called by NetworkManager/dispatcher.d script
+	[ "$1" == "$wifi_device" -a "$2" == "up" ] || exit 0
+fi
+
+# what access points are available
+gen_ap_list $ap_list_file
+# what's up
+ap_state "up" $up_list_file
+# and down
+ap_state "down" $down_list_file
+
+logit "is $desired_ssid up?"
+while read ssid
+do
+   # echo "does [$ssid] match [$desired_ssid]?"
+   if [ "$ssid" == "$desired_ssid" ] ; then
+		logit "$desired_ssid is up"
+		start_application
+		exit 0
+   fi
+done < $up_list_file
+
+while read ap	# from down_list_file
+do
+	if [ "$ap" == "$desired_ssid" ] ; then
+		logit "try to start ${ap}"
+		nmcli connection up ${ap}
+		rc=$?
+		logit "up ${ap} rc is $rc"
+		if [ "$rc" = "0" ] ; then
+			# successful, start the application and return
+			start_application
+			exit 0
+		fi
+	fi
+done < $down_list_file
+
+logit "couldn't connect to $desired_ssid"
+
+exit 0

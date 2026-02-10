@@ -1,0 +1,11 @@
+[Unit]
+Description=WiFind network customization
+After=network-online.target
+
+[Service]
+ExecStart=_TARGET_/systemd/cust-net
+WorkingDirectory=_TARGET_
+Type=forking
+
+[Install]
+WantedBy=multi-user.target

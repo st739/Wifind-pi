@@ -1,0 +1,1 @@
+@reboot _TARGET_/networkmanager/killswitch

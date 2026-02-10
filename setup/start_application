@@ -1,0 +1,16 @@
+#!/bin/env sh
+#
+# This is a stub to start an arbitrary application
+# Set up the environment, do whatever testing and checking is necessary and start an application
+# because this is started from systemd which polices child processes
+# the systemd service type has to be set appropriately
+# it's set to Type=forking rather than type=simple because the start_application function
+# in cust-net starts this application as a daemon
+# Runs as root, so su to a user if necessary
+# use #!/bin/env whatever_you_want on the first line
+# 
+topdir=$1
+echo "$(date +"%D %T") cd ${topdir}/application && python3 ./application.py" > ${topdir}/start.log
+# clear the killswitch
+[ -f $topdir/data/kill_file ] && rm $topdir/data/kill_file
+cd ${topdir}/application && nohup python3 ./application.py 0<&- &>/dev/null &
