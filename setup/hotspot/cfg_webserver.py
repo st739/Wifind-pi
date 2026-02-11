@@ -109,8 +109,10 @@ hotspot="{hotspot}"
 password="{password}"
 preferred_ip={preferred_ip}
 topdir={topdir}
+this=$(basename $0)
+out="/tmp/$this.$$.out"
+err="/tmp/$this.$$.err"
 rc=
-# FIXME - parameter file
 log=$topdir/nmcli.log
 application_ssid_file=$topdir/data/application_ssid
 echo "logging to $log" | tee $log
@@ -605,12 +607,10 @@ s_print(f'Main: topdir [{topdir}]')
 wifi_errs_file = topdir + '/data/' + my_c.wifi_errs_file
 wifi_json_file = topdir + '/data/' + my_c.wifi_json_file
 ap_cfg_html_file = topdir + '/hotspot/templates/' + my_c.ap_cfg_html_file
-help_html_file = topdir + '/hotspot/templates/' + my_c.help_html_file
 
 s_print(f'Main: wifi_errs_file [{wifi_errs_file}]')
 s_print(f'Main: wifi_json_file [{wifi_json_file}]')
 s_print(f'Main: ap_cfg_html_file [{ap_cfg_html_file}]')
-s_print(f'Main: help_html_file [{help_html_file}]')
 
 my_pid=str(os.getpid())
 

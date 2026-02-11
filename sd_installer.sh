@@ -106,6 +106,17 @@ do
 		cd $SCRIPT_DIR/setup/$dir/ && ln -s ../microdot .
 	fi
 done
+# set up local symlinks for data
+for dir in application hotspot
+do
+	if [ -L $SCRIPT_DIR/setup/$dir/data ] ; then
+		:
+	else
+		cd $SCRIPT_DIR/setup/$dir/ && ln -s ../data .
+	fi
+done
+
+cd $SCRIPT_DIR
 
 # change the _TARGET_ in systemd/cust-net.service
 sed -s "s|_TARGET_|$topdir|g" ./setup/systemd/cust-net.template > ./setup/systemd/cust-net.service
