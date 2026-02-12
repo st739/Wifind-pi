@@ -5,7 +5,6 @@
 import my_configuration as my_c
 
 def render_confirm_cfg(ap_cfg_html_file, ap_json, errors):
-    # print(f'Render_confirm_cfg: ap_json [{ap_json}], errors [{errors}]')
     with open(ap_cfg_html_file, 'w') as html_file:
         html_file.write(f'{my_c.html_doctype}')
         html_file.write('<style>')
@@ -40,7 +39,6 @@ def render_ap_cfg(ap_cfg_html_file, wifi_errs_file, ap_json, errors):
         if f_errs:
             for item in f_errs:
                 errors.append(item.strip())
-    # print(f'Render_ap_cfg: ap_json [{ap_json}], ERRORS [{errors}]')
     if len(ap_json['access_points']) < 1:
         # either none or just the Hotspot
         errors.append('No WiFi networks, try restarting')

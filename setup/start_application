@@ -10,7 +10,7 @@
 # use #!/bin/env whatever_you_want on the first line
 # 
 topdir=$1
-echo "$(date +"%D %T") cd ${topdir}/application && python3 ./application.py" > ${topdir}/start.log
+# echo "$(date +"%D %T") cd ${topdir}/application && python3 ./application.py" > ${topdir}/start.log
 # clear the killswitch
 [ -f $topdir/data/kill_file ] && rm $topdir/data/kill_file
 cd ${topdir}/application && nohup python3 ./application.py 0<&- &>/dev/null &

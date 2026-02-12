@@ -31,7 +31,7 @@ an IP address. (Most routers allocate low addresses so try an IP between
 
 Enter the password for the chosen network and save.
 The pi will attempt to connect to the selected WiFi network and allocate
-the requested address. During this process, the pi hotspot will disappear.
+the requested address [1]. During this process, the pi hotspot will disappear.
 When the pi hotspot restarts, reconnect to 10.42.0.1
 
 You should see a "connected to" message and the provided IP and MAC addresses.
@@ -39,6 +39,9 @@ Press the "Save" button and the pi should connect to the chosen WiFi
 network with the requested address.
 Connect to the chosen WiFi network and browse to the provided address.
 You should get a "hello world" webpage (again on port 80).
+
+If an error occurs or if the requested address is in use (see [1] above) an
+error message will be displayed. Fix the error and retry.
 
 To start your own application:  
 Alter the application.py script to import and start your application.
@@ -81,14 +84,3 @@ will boot in hotspot mode to allow connection to a new network.
 Note that if the pi successfully connects to the existing network when power
 cycled the deadman switch is reset and your application will be started as
 normal.
-
-
-
-
-
-
-
-The pico will start a WiFi hotspot (Hotspot) with no password.
-
-
-

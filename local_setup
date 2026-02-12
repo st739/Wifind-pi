@@ -22,13 +22,12 @@ fi
 config_file=$rootdir$topdir/local_config
 
 # change the hotspot name and hotspot password as desired.
-# please don't use spaces in the hotspot name or password
-hotspot_name="Hot Spot"
+hotspot_name="HotSpot"
 hotspot_password="HotSpot1" # must be >= 8 characters
 
 # optional ####################################################################
-desired_timezone="Africa/Johannesburg"
-desired_wifi_country="ZA"
+desired_timezone=
+desired_wifi_country=
 ##############################################################################
 
 ##############################################################################
