@@ -118,6 +118,9 @@ done
 
 cd $SCRIPT_DIR
 
+# confirm that microdot has been unpacked into the setup/microdot directory
+[ -f $SCRIPT_DIR/setup/microdot/microdot.py ] || { echo "Copy microdot.py to $SCRIPT_DIR/setup/microdot/microdot.py" ; exit 1 ; }
+
 # change the _TARGET_ in systemd/cust-net.service
 sed -s "s|_TARGET_|$topdir|g" ./setup/systemd/cust-net.template > ./setup/systemd/cust-net.service
 
