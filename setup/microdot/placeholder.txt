@@ -1,0 +1,3 @@
+# this file exists to allow the microdot directory to be added to git and
+# to permit the sd_installer to test for the availability of the microdot
+# package
