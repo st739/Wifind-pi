@@ -1,0 +1,22 @@
+#!/usr/bin/bash
+topdir=$(dirname $0)
+hotspot_name="$1"
+json="{brace} \\"hotspot_name\\": \\"$hotspot_name\\", \\"preferred_ip\\": \\"\\", \\"access_points\\": ["
+# set IFS to nl to prevent word split on silly hotspot names
+IFS='
+'
+for line in $(nmcli --terse device wifi list | cut -d: -f8,12)
+do
+   ap=$(echo $line|cut -d: -f1)
+   # lose non-numerics if they turn up in field 12
+   stren=$(echo $line|cut -d: -f2|sed 's/[^0-9]*//g')
+   [ "$stren" ] || stren=0 # this will drop aps with non-numeric strength
+   # arb choice of 45 to weed out weak aps
+   if [ $stren -gt 45 ] ; then
+      json="$json \\"$ap\\","
+   fi
+done
+unset IFS
+json=$(echo $json | sed 's/,$/]{ecarb}/')
+echo $json > $topdir/data/wifi.json
+exit 0

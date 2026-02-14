@@ -1,0 +1,97 @@
+#!/usr/bin/bash
+try_eval()
+{
+    $(eval "$1" >$out 2>$err)
+    rc=$?
+    if [ $rc -eq 0 ] ; then
+        [ -f $out ] && cat $out
+    else
+        [ -f $err ] && cat $err
+    fi
+    rm $out $err >/dev/null 2>&1
+    return $rc
+}
+# allow blanks in arguments
+ssid="$1"
+password="$2"
+hotspot="$3"
+preferred_ip="$4"
+here=$(dirname $0)
+topdir=$here
+this=$(basename $0)
+out="/tmp/$this.$$.out"
+err="/tmp/$this.$$.err"
+rc=
+application_ssid_file=$topdir/data/application_ssid
+# rescan here. If too much time has passed, nmcli "forgets"
+nmcli device wifi >/dev/null 2>&1
+eval "nmcli device wifi connect \"$ssid\" password \"$password\""
+if [ $? -ne 0 ] ; then
+    echo "Can't connect to \"$ssid\" using password" >&2
+    rc=1
+    # try the Trixie command
+    eval "nmcli connection up \"$ssid\""
+    if [ $? -ne 0 ] ; then
+        echo "Can't bring $ssid connection up" >&2
+        rc=1
+    else
+        rc=
+    fi
+else
+    rc=
+fi
+[ "$rc" ] && exit $rc
+
+# ssid is up, update the application_ssid file for systemd on subsequent boots
+echo $ssid > $application_ssid_file
+                  
+ip_mask=$(try_eval "nmcli -g IP4.ADDRESS connection show \"$ssid\" ")
+full_ip=$(echo $ip_mask | cut -d/ -f1)
+subnet_mask=$(echo $ip_mask | cut -d/ -f2)
+
+if [ "$preferred_ip" ] ; then
+   # what's our ipv4 address?
+   network=$(echo $full_ip | cut -d. -f-3)
+   full_preferred_ip=$network.$preferred_ip
+   # do we have our preferred ip?
+   ifconfig -a | grep inet | grep $full_preferred_ip >/dev/null 2>&1
+   if [ $? -eq 0 ] ; then
+      # we have our ip
+      echo "IP=$full_preferred_ip"
+      rc=0
+   else
+      echo "Preferred IP is in use $full_preferred_ip" >&2
+      rc=1
+   fi
+else
+   echo "DHCP=$full_ip"
+   rc=0
+fi
+if [ "$rc" = "1" ] ; then
+   eval "nmcli connection down \"$ssid.\""
+   eval "nmcli connection up \"$hotspot\""
+else
+   # setting pipefail provides the return code of the pipe command
+   eval "nmcli connection modify \"$ssid\" ipv6.method disabled 2>&1"
+   rc=$?
+   if [ "$rc" = "0" ] ; then
+      :
+   else
+      exit $rc
+   fi
+   eval "nmcli connection down \"$ssid\" 2>&1"
+   rc=$?
+   if [ "$rc" = "0" ] ; then
+      :
+   else
+      exit $rc
+   fi
+   eval "nmcli connection up \"$ssid\" 2>&1"
+   rc=$?
+   if [ "$rc" = "0" ] ; then
+      :
+   else
+      exit $rc
+   fi
+fi
+exit $rc

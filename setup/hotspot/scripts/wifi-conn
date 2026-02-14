@@ -1,0 +1,91 @@
+#!/usr/bin/bash
+try_eval()
+{
+    $(eval "$1" >$out 2>$err)
+    rc=$?
+    if [ $rc -eq 0 ] ; then
+        [ -f $out ] && cat $out
+    else
+        [ -f $err ] && cat $err
+    fi
+    rm $out $err >/dev/null 2>&1
+    return $rc
+}
+# allow blanks in arguments
+ssid="$1"
+password="$2"
+preferred_ip="$3"
+hotspot="$4"
+this=$(basename $0)
+out="/tmp/$this.$$.out"
+err="/tmp/$this.$$.err"
+tries=3
+try=1
+# clear an existing ssid entry - avoid possible "IP in use" error
+# which could happen if the user quits from the confirmation page
+eval "nmcli connection delete \"$ssid\" >/dev/null 2>&1"
+# refresh the list of available networks
+# otherwise we could fail to connect
+nmcli device wifi >/dev/null 2>&1
+while [ $try -le $tries ] ;
+do
+    result=$(try_eval "nmcli device wifi connect \"$ssid\" password \"$password\"")
+    rc=$?
+    if [ $rc -ne 0 ] ; then
+        sleep 5
+    else
+        echo "PASS:Connected to $ssid"
+        break
+    fi
+    try=$(($try+1))
+done
+if [ $try -ge $tries ] ; then
+    # error message for wrong password is confusing 
+    # "secrets were required but not provided..." - simplify
+    error=$(echo $result | sed 's/Error: //')
+    echo $error | grep -wE 'required|provided' >/dev/null && error="Wrong password"
+    echo "FAIL:Can't connect to $ssid, $error" >&2
+    # whack any nmcli entry
+    eval "nmcli connection delete \"$ssid\" >/dev/null 2>&1"
+    exit 1
+fi
+
+ip_mask=$(try_eval "nmcli -g IP4.ADDRESS connection show \"$ssid\" ")
+full_ip=$(echo $ip_mask | cut -d/ -f1)
+subnet_mask=$(echo $ip_mask | cut -d/ -f2)
+
+if [ "$preferred_ip" ] ; then
+   # what's our ipv4 address?
+   network=$(echo $full_ip | cut -d. -f-3)
+   full_preferred_ip=$network.$preferred_ip
+   # should/shouldn't iterate here until we get a free IP?
+   ping -c 3 $full_preferred_ip >/dev/null 2>&1
+   if [ $? -ne 0 ] ; then
+       # ip is available
+       eval "nmcli connection modify --temporary \"$ssid\" +ipv4.address $full_preferred_ip/$subnet_mask"
+       if [ $? -ne 0 ] ; then
+           echo "Can't configure $full_preferred_ip on $ssid" >&2
+           # whack any nmcli entry
+           eval "nmcli connection delete \"$ssid\" >/dev/null 2>&1"
+           exit 1
+       fi
+       echo "IP=$full_preferred_ip"
+    else
+       echo "Preferred IP is in use $full_preferred_ip" >&2
+       # whack any nmcli entry
+       eval "nmcli connection delete \"$ssid\" >/dev/null 2>&1"
+       exit 1
+   fi
+else
+   echo "DHCP=$full_ip"
+fi
+# try to lose IPv6
+eval "nmcli connection modify \"$ssid\" ipv6.method disabled"
+eval "nmcli connection down \"$ssid\""
+# but bringing up the hotspot should take the ssid down
+result=$(try_eval "nmcli connection up \"$hotspot\"")
+if [ $? -ne 0 ] ; then
+    echo "$result" >&2
+    exit 1
+fi
+exit 0

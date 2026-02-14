@@ -39,118 +39,14 @@ def parse_ap_cfg(creds, wifi_json):
     return(wifi_json)
 
 def confirm_wifi(wifi_json):
-    shell_script = Path(f'/tmp/wifi-conf.{str(os.getpid())}')
+    shell_script = Path(f'{topdir}/hotspot/scripts/wifi-conf')
     password = wifi_json['wifi_pass']
     ssid = wifi_json['ssid']
     hotspot = wifi_json['hotspot_name']
     preferred_ip = wifi_json['preferred_ip']
-    brace = '{'
-    ecarb = '}'
 
-    # at this point, we have set a preferred ip so
-    # we should come up on the preferred ip. Use ifconfig to check
-    with open(shell_script, 'w') as s_s:
-        s_s.write(f'''#!/usr/bin/bash
-try_eval()
-{brace}
-    $(eval "$1" >$out 2>$err)
-    rc=$?
-    if [ $rc -eq 0 ] ; then
-        [ -f $out ] && cat $out
-    else
-        [ -f $err ] && cat $err
-    fi
-    rm $out $err >/dev/null 2>&1
-    return $rc
-{ecarb}
-# allow blanks in strings
-ssid="{ssid}"
-hotspot="{hotspot}"
-password="{password}"
-preferred_ip={preferred_ip}
-topdir={topdir}
-this=$(basename $0)
-out="/tmp/$this.$$.out"
-err="/tmp/$this.$$.err"
-rc=
-log=$topdir/nmcli.log
-application_ssid_file=$topdir/data/application_ssid
-# rescan here. If too much time has passed, nmcli "forgets"
-nmcli device wifi >/dev/null 2>&1
-eval "nmcli device wifi connect \\"$ssid\\" password \\"$password\\""
-if [ $? -ne 0 ] ; then
-    echo "Can't connect to \"$ssid\" using password" >&2
-    rc=1
-    # try the Trixie command
-    eval "nmcli connection up \\"$ssid\\""
-    if [ $? -ne 0 ] ; then
-        echo "Can't bring $ssid connection up" >&2
-        rc=1
-    else
-        rc=
-    fi
-else
-    rc=
-fi
-[ "$rc" ] && exit $rc
-
-# ssid is up, update the application_ssid file for systemd on subsequent boots
-echo $ssid > $application_ssid_file
-                  
-ip_mask=$(try_eval "nmcli -g IP4.ADDRESS connection show \\"$ssid\\" ")
-full_ip=$(echo $ip_mask | cut -d/ -f1)
-subnet_mask=$(echo $ip_mask | cut -d/ -f2)
-
-if [ "$preferred_ip" ] ; then
-   # what's our ipv4 address?
-   network=$(echo $full_ip | cut -d. -f-3)
-   full_preferred_ip=$network.$preferred_ip
-   # do we have our preferred ip?
-   ifconfig -a | grep inet | grep $full_preferred_ip >/dev/null 2>&1
-   if [ $? -eq 0 ] ; then
-      # we have our ip
-      echo "IP=$full_preferred_ip"
-      rc=0
-   else
-      echo "Preferred IP is in use $full_preferred_ip" >&2
-      rc=1
-   fi
-else
-   echo "DHCP=$full_ip"
-   rc=0
-fi
-if [ "$rc" = "1" ] ; then
-   eval "nmcli connection down \\"$ssid.\\""
-   eval "nmcli connection up \\"$hotspot\\""
-else
-   # setting pipefail provides the return code of the pipe command
-   eval "nmcli connection modify \\"$ssid\\" ipv6.method disabled 2>&1"
-   rc=$?
-   if [ "$rc" = "0" ] ; then
-      :
-   else
-      exit $rc
-   fi
-   eval "nmcli connection down \\"$ssid\\" 2>&1"
-   rc=$?
-   if [ "$rc" = "0" ] ; then
-      :
-   else
-      exit $rc
-   fi
-   eval "nmcli connection up \\"$ssid\\" 2>&1"
-   rc=$?
-   if [ "$rc" = "0" ] ; then
-      :
-   else
-      exit $rc
-   fi
-fi
-exit $rc
-'''
-                 )
-
-    cmd = ['bash', f'{shell_script}']
+    cmd = ['bash', f'{shell_script}', f'{ssid}', f'{password}',
+           f'{hotspot}', f'{preferred_ip}']
     try:
         rc = subprocess.run(cmd, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
@@ -171,44 +67,16 @@ exit $rc
             elif 'Connection successfully activated' in lyne:
                 wifi_json['state'] = 'up'
 
-    shell_script.unlink()
     return wifi_json
 
 def wifi_rescan(wifi_json):
     '''
     rescan
     '''
-    shell_script = Path(f'/tmp/wifi-scan.{str(os.getpid())}')
-    brace = '{'
-    ecarb = '}'
+    shell_script = Path(f'{topdir}/hotspot/scripts/wifi-scan')
     hotspot_name = wifi_json['hotspot_name']
 
-    with open(shell_script, 'w') as s_s:
-        s_s.write(f'''#!/usr/bin/bash
-topdir={topdir}
-hotspot_name="{hotspot_name}"
-json="{brace} \\"hotspot_name\\": \\"$hotspot_name\\", \\"preferred_ip\\": \\"\\", \\"access_points\\": ["
-# set IFS to nl to prevent word split on silly hotspot names
-IFS='
-'
-for line in $(nmcli --terse device wifi list | cut -d: -f8,12)
-do
-   ap=$(echo $line|cut -d: -f1)
-   # lose non-numerics if they turn up in field 12
-   stren=$(echo $line|cut -d: -f2|sed 's/[^0-9]*//g')
-   [ "$stren" ] || stren=0 # this will drop aps with non-numeric strength
-   # arb choice of 45 to weed out weak aps
-   if [ $stren -gt 45 ] ; then
-      json="$json \\"$ap\\","
-   fi
-done
-unset IFS
-json=$(echo $json | sed 's/,$/]{ecarb}/')
-echo $json > $topdir/data/wifi.json
-exit 0
-'''
-                 )
-    cmd = ['bash', f'{shell_script}']
+    cmd = ['bash', f'{shell_script}', f'{hotspot_name}']
     try:
         rc = subprocess.run(cmd, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
@@ -224,7 +92,6 @@ exit 0
                 break
 
     wifi_json = {}
-    shell_script.unlink()
     return wifi_json
 
 def connect_to_wifi(wifi_json):
@@ -234,111 +101,13 @@ def connect_to_wifi(wifi_json):
     Then return either the DHCP IP or the full preferred IP
     If there's a configured nmconnection on entry, remove it
     '''
-    shell_script = Path(f'/tmp/wifi-conn.{str(os.getpid())}')
+    shell_script = Path(f'{topdir}/hotspot/scripts/wifi-conn')
     password = wifi_json['wifi_pass']
     ssid = wifi_json['ssid']
     hotspot = wifi_json['hotspot_name']
     preferred_ip = wifi_json['preferred_ip']
-    # this required to avoid escape hell or inability to escape
-    brace = '{'
-    ecarb = '}'
 
-    with open(shell_script, 'w') as s_s:
-        s_s.write(f'''#!/usr/bin/bash
-try_eval()
-{brace}
-    $(eval "$1" >$out 2>$err)
-    rc=$?
-    if [ $rc -eq 0 ] ; then
-        [ -f $out ] && cat $out
-    else
-        [ -f $err ] && cat $err
-    fi
-    rm $out $err >/dev/null 2>&1
-    return $rc
-{ecarb}
-# allow blanks in ssid and password
-ssid="{ssid}"
-hotspot="{hotspot}"
-password="{password}"
-preferred_ip={preferred_ip}
-this=$(basename $0)
-out="/tmp/$this.$$.out"
-err="/tmp/$this.$$.err"
-tries=3
-try=1
-# clear an existing ssid entry - avoid possible "IP in use" error
-# which could happen if the user quits from the confirmation page
-eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
-# refresh the list of available networks
-# otherwise we could fail to connect
-nmcli device wifi >/dev/null 2>&1
-while [ $try -le $tries ] ;
-do
-    result=$(try_eval "nmcli device wifi connect \\"$ssid\\" password \\"$password\\"")
-    rc=$?
-    if [ $rc -ne 0 ] ; then
-        sleep 5
-    else
-        echo "PASS:Connected to $ssid"
-        break
-    fi
-    try=$(($try+1))
-done
-if [ $try -ge $tries ] ; then
-    # error message for wrong password is confusing 
-    # "secrets were required but not provided..." - simplify
-    error=$(echo $result | sed 's/Error: //')
-    echo $error | grep -wE 'required|provided' >/dev/null && error="Wrong password"
-    echo "FAIL:Can't connect to $ssid, $error" >&2
-    # whack any nmcli entry
-    eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
-    exit 1
-fi
-
-ip_mask=$(try_eval "nmcli -g IP4.ADDRESS connection show \\"$ssid\\" ")
-full_ip=$(echo $ip_mask | cut -d/ -f1)
-subnet_mask=$(echo $ip_mask | cut -d/ -f2)
-
-if [ "$preferred_ip" ] ; then
-   # what's our ipv4 address?
-   network=$(echo $full_ip | cut -d. -f-3)
-   full_preferred_ip=$network.$preferred_ip
-   # should/shouldn't iterate here until we get a free IP?
-   ping -c 3 $full_preferred_ip >/dev/null 2>&1
-   if [ $? -ne 0 ] ; then
-       # ip is available
-       eval "nmcli connection modify --temporary \\"$ssid\\" +ipv4.address $full_preferred_ip/$subnet_mask"
-       if [ $? -ne 0 ] ; then
-           echo "Can't configure $full_preferred_ip on $ssid" >&2
-           # whack any nmcli entry
-           eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
-           exit 1
-       fi
-       echo "IP=$full_preferred_ip"
-    else
-       echo "Preferred IP is in use $full_preferred_ip" >&2
-       # whack any nmcli entry
-       eval "nmcli connection delete \\"$ssid\\" >/dev/null 2>&1"
-       exit 1
-   fi
-else
-   echo "DHCP=$full_ip"
-fi
-# try to lose IPv6
-eval "nmcli connection modify \\"$ssid\\" ipv6.method disabled"
-eval "nmcli connection down \\"$ssid\\""
-# but bringing up the hotspot should take the ssid down
-result=$(try_eval "nmcli connection up \\"$hotspot\\"")
-if [ $? -ne 0 ] ; then
-    echo "$result" >&2
-    exit 1
-fi
-exit 0
-'''
-                 )
-
-    cmd = ['bash', f'{shell_script}']
+    cmd = ['bash', f'{shell_script}', f'{ssid}', f'{password}', f'{preferred_ip}', f'{hotspot}']
     try:
         rc = subprocess.run(cmd, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
@@ -363,7 +132,6 @@ exit 0
                 # TEST
                 wifi_json['state'] = 'up'
 
-    shell_script.unlink()
     return wifi_json
 
 def run_webserver():

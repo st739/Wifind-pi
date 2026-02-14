@@ -94,13 +94,14 @@ fi
 # end of conditional changes
 
 # unblock wifi
-rfkill --output "TYPE,SOFT,HARD" --noheadings list wlan | read type soft hard
+soft=$(rfkill --output "SOFT" --noheadings list wlan)
+hard=$(rfkill --output "HARD" --noheadings list wlan)
 if [ "$soft" = "unblocked" -a "$hard" = "unblocked" ] ; then
 	:
 else
 	rfkill unblock wifi
 fi
-nmcli --get-values "WIFI-HW,WIFI" radio | read line
+line=$(nmcli --get-values "WIFI-HW,WIFI" radio)
 if [ "$line" = "enabled:enabled" ] ; then
 	:
 else
